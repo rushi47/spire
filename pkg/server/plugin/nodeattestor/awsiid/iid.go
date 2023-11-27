@@ -26,6 +26,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	"github.com/fullsailor/pkcs7"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/hcl"
@@ -77,9 +78,10 @@ const (
 	tagSelectorPrefix        = "tag"
 	iamRoleSelectorPrefix    = "iamrole"
 	// below account id and role would be use to aws organisation client
-	orgAccountID   = "org_account_id"
-	orgAccountRole = "org_account_role"
-	orgAccRegion   = "org_acc_region" // required for cache key
+	orgAccountID     = "org_account_id"
+	orgAccountRole   = "org_account_role"
+	orgAccRegion     = "org_acc_region" // required for cache key
+	orgAccountStatus = "ACTIVE"         // Only allow node account id's with status ACTIVE
 )
 
 // BuiltIn creates a new built-in plugin
@@ -187,12 +189,9 @@ func (p *IIDAttestorPlugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServ
 	// WIP : Check if the account belongs to organisation
 	// Get the account id of the node from attestation and then check if respective account belongs to organisation
 	if p.config.ValidateOrgAccountIDS != nil {
-		_, err := p.validateAccountBelongstoOrg(ctx, attestationData.AccountID)
-
-		if err != nil {
-			return status.Errorf(codes.Internal, "unable to get aws org client for verification: %v", err)
+		if err := p.validateAccountBelongstoOrg(ctx, attestationData.AccountID); err != nil {
+			return status.Errorf(codes.Internal, "issue while verifying if nodes account id belong to org, failed aws node attestation: %v", err)
 		}
-
 	}
 
 	// Ideally we wouldn't do this work at all if the agent has already attested
@@ -589,17 +588,29 @@ func isValidAWSPartition(partition string) bool {
 // This verification method checks if the Account ID attached on the node belongs to the organisation
 // if it belongs to organisation then validation should be succesfull if not attestation should fail on turning on this verification
 // method. Ideally this could be alternative to method for not explictly maintaing allowed list of account ids
-func (p *IIDAttestorPlugin) validateAccountBelongstoOrg(ctx context.Context, accoundIdofNode string) (bool, error) {
+func (p *IIDAttestorPlugin) validateAccountBelongstoOrg(ctx context.Context, accoundIDofNode string) error {
 
 	orgAccountID := p.config.ValidateOrgAccountIDS[orgAccountID]
 	orgAccountRegion := p.config.ValidateOrgAccountIDS[orgAccRegion]
 	orgAccountRole := p.config.ValidateOrgAccountIDS[orgAccountRole]
 
-	_, err := p.clients.getClient(ctx, orgAccountRegion, orgAccountID, orgAccountRole)
-
+	awsOrgClient, err := p.clients.getClient(ctx, orgAccountRegion, orgAccountID, orgAccountRole)
 	if err != nil {
-		return false, err
+		return err
 	}
 
-	return true, nil
+	// Check if the account id belongs to org
+	descAccOpt, err := awsOrgClient.DescribeAccount(ctx, &organizations.DescribeAccountInput{
+		AccountId: &accoundIDofNode,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Only allow if the status of the account is ACTIVE.
+	if descAccOpt.Account.Status != orgAccountStatus {
+		return fmt.Errorf("%v, account id status is not active", accoundIDofNode)
+	}
+
+	return nil
 }
