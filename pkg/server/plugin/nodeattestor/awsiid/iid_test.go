@@ -22,6 +22,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	"github.com/fullsailor/pkcs7"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -572,6 +573,8 @@ type fakeClient struct {
 	DescribeInstancesError   error
 	GetInstanceProfileOutput *iam.GetInstanceProfileOutput
 	GetInstanceProfileError  error
+	DescribeAccountOutput    *organizations.DescribeAccountOutput
+	DescribeAccountError     error
 }
 
 func newFakeClient() *fakeClient {
@@ -595,6 +598,7 @@ func newFakeClient() *fakeClient {
 			},
 		},
 		GetInstanceProfileOutput: &iam.GetInstanceProfileOutput{},
+		DescribeAccountOutput:    &organizations.DescribeAccountOutput{},
 	}
 }
 
@@ -617,6 +621,11 @@ func (c *fakeClient) GetInstanceProfile(_ context.Context, input *iam.GetInstanc
 		return nil, fmt.Errorf("unexpected request: %s", diff)
 	}
 	return c.GetInstanceProfileOutput, c.GetInstanceProfileError
+}
+
+func (c *fakeClient) DescribeAccount(_ context.Context, input *organizations.DescribeAccountInput, _ ...func(*organizations.Options)) (*organizations.DescribeAccountOutput, error) {
+	// WIP
+	return c.DescribeAccountOutput, c.DescribeAccountError
 }
 
 func buildAttestationDataRSA2048Signature(t *testing.T) caws.IIDAttestationData {

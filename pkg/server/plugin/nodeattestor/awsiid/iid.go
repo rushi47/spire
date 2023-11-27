@@ -76,6 +76,10 @@ const (
 	sgNameSelectorPrefix     = "sg:name"
 	tagSelectorPrefix        = "tag"
 	iamRoleSelectorPrefix    = "iamrole"
+	// below account id and role would be use to aws organisation client
+	orgAccountID   = "org_account_id"
+	orgAccountRole = "org_account_role"
+	orgAccRegion   = "org_acc_region" // required for cache key
 )
 
 // BuiltIn creates a new built-in plugin
@@ -112,12 +116,13 @@ type IIDAttestorPlugin struct {
 // IIDAttestorConfig holds hcl configuration for IID attestor plugin
 type IIDAttestorConfig struct {
 	SessionConfig                   `hcl:",squash"`
-	SkipBlockDevice                 bool     `hcl:"skip_block_device"`
-	DisableInstanceProfileSelectors bool     `hcl:"disable_instance_profile_selectors"`
-	LocalValidAcctIDs               []string `hcl:"account_ids_for_local_validation"`
-	AgentPathTemplate               string   `hcl:"agent_path_template"`
-	AssumeRole                      string   `hcl:"assume_role"`
-	Partition                       string   `hcl:"partition"`
+	SkipBlockDevice                 bool              `hcl:"skip_block_device"`
+	DisableInstanceProfileSelectors bool              `hcl:"disable_instance_profile_selectors"`
+	LocalValidAcctIDs               []string          `hcl:"account_ids_for_local_validation"`
+	AgentPathTemplate               string            `hcl:"agent_path_template"`
+	AssumeRole                      string            `hcl:"assume_role"`
+	Partition                       string            `hcl:"partition"`
+	ValidateOrgAccountIDS           map[string]string `hcl:"account_ids_belong_to_org_validation"`
 	pathTemplate                    *agentpathtemplate.Template
 	trustDomain                     spiffeid.TrustDomain
 	getAWSCACertificate             func(string, PublicKeyType) (*x509.Certificate, error)
@@ -165,7 +170,7 @@ func (p *IIDAttestorPlugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServ
 	ctx, cancel := context.WithTimeout(stream.Context(), awsTimeout)
 	defer cancel()
 
-	awsClient, err := p.clients.getClient(ctx, attestationData.Region, attestationData.AccountID)
+	awsClient, err := p.clients.getClient(ctx, attestationData.Region, attestationData.AccountID, p.config.AssumeRole)
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to get client: %v", err)
 	}
@@ -177,6 +182,17 @@ func (p *IIDAttestorPlugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServ
 
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to describe instance: %v", err)
+	}
+
+	// WIP : Check if the account belongs to organisation
+	// Get the account id of the node from attestation and then check if respective account belongs to organisation
+	if p.config.ValidateOrgAccountIDS != nil {
+		_, err := p.validateAccountBelongstoOrg(ctx, attestationData.AccountID)
+
+		if err != nil {
+			return status.Errorf(codes.Internal, "unable to get aws org client for verification: %v", err)
+		}
+
 	}
 
 	// Ideally we wouldn't do this work at all if the agent has already attested
@@ -270,6 +286,17 @@ func (p *IIDAttestorPlugin) Configure(_ context.Context, req *configv1.Configure
 	}
 	if !isValidAWSPartition(config.Partition) {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid partition %q, must be one of: %v", config.Partition, partitions)
+	}
+
+	// Check if the ValidateAccountIDs block if configured then is valid : has account ID and role param
+	if config.ValidateOrgAccountIDS != nil {
+		_, checkAccid := config.ValidateOrgAccountIDS[orgAccountID]
+		_, checkAccRole := config.ValidateOrgAccountIDS[orgAccountRole]
+		_, checkAccRegion := config.ValidateOrgAccountIDS[orgAccRegion]
+
+		if !checkAccid || !checkAccRole || !checkAccRegion {
+			return nil, status.Errorf(codes.InvalidArgument, "make sure 'account_id', 'role' & 'region' are present inside block : %v for feature node attestation using account id verification", "account_ids_belong_to_org_validation")
+		}
 	}
 
 	p.mtx.Lock()
@@ -557,4 +584,22 @@ func isValidAWSPartition(partition string) bool {
 		}
 	}
 	return false
+}
+
+// This verification method checks if the Account ID attached on the node belongs to the organisation
+// if it belongs to organisation then validation should be succesfull if not attestation should fail on turning on this verification
+// method. Ideally this could be alternative to method for not explictly maintaing allowed list of account ids
+func (p *IIDAttestorPlugin) validateAccountBelongstoOrg(ctx context.Context, accoundIdofNode string) (bool, error) {
+
+	orgAccountID := p.config.ValidateOrgAccountIDS[orgAccountID]
+	orgAccountRegion := p.config.ValidateOrgAccountIDS[orgAccRegion]
+	orgAccountRole := p.config.ValidateOrgAccountIDS[orgAccountRole]
+
+	_, err := p.clients.getClient(ctx, orgAccountRegion, orgAccountID, orgAccountRole)
+
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }

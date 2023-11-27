@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -15,9 +16,15 @@ var (
 	defaultNewClientCallback = newClient
 )
 
+// Explict declaration of interface  (DescribeAccount) for Organization, as official aws-sdk-go doesn't define interfaces like ec2, iam.
+type wrappedOrganizationAPIClient interface {
+	DescribeAccount(ctx context.Context, params *organizations.DescribeAccountInput, optFns ...func(*organizations.Options)) (*organizations.DescribeAccountOutput, error)
+}
+
 type Client interface {
 	ec2.DescribeInstancesAPIClient
 	iam.GetInstanceProfileAPIClient
+	wrappedOrganizationAPIClient
 }
 
 type clientsCache struct {
@@ -48,7 +55,7 @@ func (cc *clientsCache) configure(config SessionConfig) {
 	cc.mtx.Unlock()
 }
 
-func (cc *clientsCache) getClient(ctx context.Context, region, accountID string) (Client, error) {
+func (cc *clientsCache) getClient(ctx context.Context, region, accountID string, assumeRole string) (Client, error) {
 	// Do an initial check to see if p client for this region already exists
 	cacheKey := accountID + "@" + region
 
@@ -111,8 +118,10 @@ func newClient(ctx context.Context, config *SessionConfig, region string, assume
 	return struct {
 		iam.GetInstanceProfileAPIClient
 		ec2.DescribeInstancesAPIClient
+		wrappedOrganizationAPIClient
 	}{
-		GetInstanceProfileAPIClient: iam.NewFromConfig(conf),
-		DescribeInstancesAPIClient:  ec2.NewFromConfig(conf),
+		GetInstanceProfileAPIClient:  iam.NewFromConfig(conf),
+		DescribeInstancesAPIClient:   ec2.NewFromConfig(conf),
+		wrappedOrganizationAPIClient: organizations.NewFromConfig(conf),
 	}, nil
 }
