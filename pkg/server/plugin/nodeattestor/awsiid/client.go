@@ -16,15 +16,15 @@ var (
 	defaultNewClientCallback = newClient
 )
 
-// Explict declaration of interface  (DescribeAccount) for Organization, as official aws-sdk-go doesn't define interfaces like ec2, iam.
-type wrappedOrganizationAPIClient interface {
+// Explict declaration of DescribeAccount interface for organization, as oficial awsk sdk for organization doesn't define interfaces for this method.
+type OrgDescribeAccountAPIClient interface {
 	DescribeAccount(ctx context.Context, params *organizations.DescribeAccountInput, optFns ...func(*organizations.Options)) (*organizations.DescribeAccountOutput, error)
 }
 
 type Client interface {
 	ec2.DescribeInstancesAPIClient
 	iam.GetInstanceProfileAPIClient
-	wrappedOrganizationAPIClient
+	OrgDescribeAccountAPIClient
 }
 
 type clientsCache struct {
@@ -83,10 +83,15 @@ func (cc *clientsCache) getClient(ctx context.Context, region, accountID string,
 		return nil, status.Error(codes.FailedPrecondition, "not configured")
 	}
 
-	var assumeRoleArn string
-	if cc.config.AssumeRole != "" {
-		assumeRoleArn = fmt.Sprintf("arn:%s:iam::%s:role/%s", cc.config.Partition, accountID, cc.config.AssumeRole)
+	// Override role from sessionconfig if sent as input : used current while getting org client
+	var role string
+	if assumeRole != "" {
+		role = assumeRole
+	} else if cc.config.AssumeRole != "" {
+		role = cc.config.AssumeRole
 	}
+
+	assumeRoleArn := fmt.Sprintf("arn:%s:iam::%s:role/%s", cc.config.Partition, accountID, role)
 
 	client, err := cc.newClient(ctx, cc.config, region, assumeRoleArn)
 	if err != nil {
@@ -118,10 +123,10 @@ func newClient(ctx context.Context, config *SessionConfig, region string, assume
 	return struct {
 		iam.GetInstanceProfileAPIClient
 		ec2.DescribeInstancesAPIClient
-		wrappedOrganizationAPIClient
+		OrgDescribeAccountAPIClient
 	}{
-		GetInstanceProfileAPIClient:  iam.NewFromConfig(conf),
-		DescribeInstancesAPIClient:   ec2.NewFromConfig(conf),
-		wrappedOrganizationAPIClient: organizations.NewFromConfig(conf),
+		GetInstanceProfileAPIClient: iam.NewFromConfig(conf),
+		DescribeInstancesAPIClient:  ec2.NewFromConfig(conf),
+		OrgDescribeAccountAPIClient: organizations.NewFromConfig(conf),
 	}, nil
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
+	"github.com/aws/aws-sdk-go-v2/service/organizations/types"
 	"github.com/fullsailor/pkcs7"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/hcl"
@@ -80,8 +81,8 @@ const (
 	// below account id and role would be use to aws organisation client
 	orgAccountID     = "org_account_id"
 	orgAccountRole   = "org_account_role"
-	orgAccRegion     = "org_acc_region" // required for cache key
-	orgAccountStatus = "ACTIVE"         // Only allow node account id's with status ACTIVE
+	orgAccRegion     = "org_account_region" // required for cache key
+	orgAccountStatus = "ACTIVE"             // Only allow node account id's with status ACTIVE
 )
 
 // BuiltIn creates a new built-in plugin
@@ -124,7 +125,7 @@ type IIDAttestorConfig struct {
 	AgentPathTemplate               string            `hcl:"agent_path_template"`
 	AssumeRole                      string            `hcl:"assume_role"`
 	Partition                       string            `hcl:"partition"`
-	ValidateOrgAccountIDS           map[string]string `hcl:"account_ids_belong_to_org_validation"`
+	ValidateOrgAccountID            map[string]string `hcl:"account_ids_belong_to_org_validation"`
 	pathTemplate                    *agentpathtemplate.Template
 	trustDomain                     spiffeid.TrustDomain
 	getAWSCACertificate             func(string, PublicKeyType) (*x509.Certificate, error)
@@ -188,9 +189,9 @@ func (p *IIDAttestorPlugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServ
 
 	// WIP : Check if the account belongs to organisation
 	// Get the account id of the node from attestation and then check if respective account belongs to organisation
-	if p.config.ValidateOrgAccountIDS != nil {
+	if p.config.ValidateOrgAccountID != nil {
 		if err := p.validateAccountBelongstoOrg(ctx, attestationData.AccountID); err != nil {
-			return status.Errorf(codes.Internal, "issue while verifying if nodes account id belong to org, failed aws node attestation: %v", err)
+			return status.Errorf(codes.Internal, "failed aws node attestation, issue while verifying if nodes account id belong to org: %v", err)
 		}
 	}
 
@@ -287,14 +288,14 @@ func (p *IIDAttestorPlugin) Configure(_ context.Context, req *configv1.Configure
 		return nil, status.Errorf(codes.InvalidArgument, "invalid partition %q, must be one of: %v", config.Partition, partitions)
 	}
 
-	// Check if the ValidateAccountIDs block if configured then is valid : has account ID and role param
-	if config.ValidateOrgAccountIDS != nil {
-		_, checkAccid := config.ValidateOrgAccountIDS[orgAccountID]
-		_, checkAccRole := config.ValidateOrgAccountIDS[orgAccountRole]
-		_, checkAccRegion := config.ValidateOrgAccountIDS[orgAccRegion]
+	// Check if the ValidateAccountIDs block if configured then is valid
+	if config.ValidateOrgAccountID != nil {
+		_, checkAccid := config.ValidateOrgAccountID[orgAccountID]
+		_, checkAccRole := config.ValidateOrgAccountID[orgAccountRole]
+		_, checkAccRegion := config.ValidateOrgAccountID[orgAccRegion]
 
 		if !checkAccid || !checkAccRole || !checkAccRegion {
-			return nil, status.Errorf(codes.InvalidArgument, "make sure 'account_id', 'role' & 'region' are present inside block : %v for feature node attestation using account id verification", "account_ids_belong_to_org_validation")
+			return nil, status.Errorf(codes.InvalidArgument, "make sure %v, %v & %v are present inside block : %v for feature node attestation using account id verification", "account_ids_belong_to_org_validation", orgAccountID, orgAccountRole, orgAccRegion)
 		}
 	}
 
@@ -590,9 +591,9 @@ func isValidAWSPartition(partition string) bool {
 // method. Ideally this could be alternative to method for not explictly maintaing allowed list of account ids
 func (p *IIDAttestorPlugin) validateAccountBelongstoOrg(ctx context.Context, accoundIDofNode string) error {
 
-	orgAccountID := p.config.ValidateOrgAccountIDS[orgAccountID]
-	orgAccountRegion := p.config.ValidateOrgAccountIDS[orgAccRegion]
-	orgAccountRole := p.config.ValidateOrgAccountIDS[orgAccountRole]
+	orgAccountID := p.config.ValidateOrgAccountID[orgAccountID]
+	orgAccountRegion := p.config.ValidateOrgAccountID[orgAccRegion]
+	orgAccountRole := p.config.ValidateOrgAccountID[orgAccountRole]
 
 	awsOrgClient, err := p.clients.getClient(ctx, orgAccountRegion, orgAccountID, orgAccountRole)
 	if err != nil {
@@ -608,7 +609,7 @@ func (p *IIDAttestorPlugin) validateAccountBelongstoOrg(ctx context.Context, acc
 	}
 
 	// Only allow if the status of the account is ACTIVE.
-	if descAccOpt.Account.Status != orgAccountStatus {
+	if descAccOpt.Account.Status != types.AccountStatusActive {
 		return fmt.Errorf("%v, account id status is not active", accoundIDofNode)
 	}
 

@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
+	"github.com/aws/aws-sdk-go-v2/service/organizations/types"
 	"github.com/fullsailor/pkcs7"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -79,6 +80,8 @@ func TestAttest(t *testing.T) {
 		describeInstancesError         error
 		mutateGetInstanceProfileOutput func(output *iam.GetInstanceProfileOutput)
 		getInstanceProfileError        error
+		mutateDescribeAccountOutput    func(output *organizations.DescribeAccountOutput)
+		describeOrgAccountError        error
 		overrideAttestationData        func(caws.IIDAttestationData) caws.IIDAttestationData
 		overridePayload                func() []byte
 		expectCode                     codes.Code
@@ -391,6 +394,42 @@ func TestAttest(t *testing.T) {
 				{Type: caws.PluginName, Value: "tag:Hostname:host1"},
 			},
 		},
+		{
+			name:                    "fail with invalid config for org validation to node account id",
+			config:                  `account_ids_belong_to_org_validation = { org_account_id = "12345" org_account_role = "test-orgrole" org_account_region = "test-orgregion" }`,
+			expectCode:              codes.Internal,
+			describeOrgAccountError: errors.New("whutt !!"),
+			expectMsgPrefix:         "nodeattestor(aws_iid): failed aws node attestation, issue while verifying if nodes account id belong to org",
+		},
+		{
+			name:       "fail account for node not in active status, when check against organization",
+			config:     `account_ids_belong_to_org_validation = { org_account_id = "12345" org_account_role = "test-orgrole" org_account_region = "test-orgregion" }`,
+			expectCode: codes.Internal,
+			mutateDescribeAccountOutput: func(output *organizations.DescribeAccountOutput) {
+				output.Account = &types.Account{
+					Status: types.AccountStatusSuspended,
+				}
+			},
+			describeOrgAccountError: errors.New("whutt !!"),
+			expectMsgPrefix:         "nodeattestor(aws_iid): failed aws node attestation, issue while verifying if nodes account id belong to org",
+		},
+		{
+			name:   "success when account is active for node in organization, and selectors are not overridden",
+			config: `account_ids_belong_to_org_validation = { org_account_id = "12345" org_account_role = "test-orgrole" org_account_region = "test-orgregion" }`,
+			mutateDescribeAccountOutput: func(output *organizations.DescribeAccountOutput) {
+				output.Account = &types.Account{
+					Id:     &testAccount,
+					Status: types.AccountStatusActive,
+				}
+			},
+			expectID: "spiffe://example.org/spire/agent/aws_iid/test-account/test-region/test-instance",
+			expectSelectors: []*common.Selector{
+				{Type: caws.PluginName, Value: "az:test-az"},
+				{Type: caws.PluginName, Value: "image:id:test-image-id"},
+				{Type: caws.PluginName, Value: "instance:id:test-instance"},
+				{Type: caws.PluginName, Value: "region:test-region"},
+			},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			client := newFakeClient()
@@ -401,6 +440,10 @@ func TestAttest(t *testing.T) {
 			client.GetInstanceProfileError = tt.getInstanceProfileError
 			if tt.mutateGetInstanceProfileOutput != nil {
 				tt.mutateGetInstanceProfileOutput(client.GetInstanceProfileOutput)
+			}
+			client.DescribeAccountError = tt.describeOrgAccountError
+			if tt.mutateDescribeAccountOutput != nil {
+				tt.mutateDescribeAccountOutput(client.DescribeAccountOutput)
 			}
 
 			agentStore := fakeagentstore.New()
@@ -546,6 +589,23 @@ func TestConfigure(t *testing.T) {
 		err := doConfig(t, coreConfig, ``)
 		require.NoError(t, err)
 	})
+
+	orgVerificationFeatureErr := fmt.Errorf("make sure %v, %v & %v are present inside block : %v for feature node attestation using account id verification", "account_ids_belong_to_org_validation", orgAccountID, orgAccountRole, orgAccRegion)
+
+	t.Run("fail, account belongs to org, if params are not specified and feature is turn on", func(t *testing.T) {
+		err := doConfig(t, coreConfig, `account_ids_belong_to_org_validation = {}`)
+		require.Error(t, err, orgVerificationFeatureErr)
+	})
+
+	t.Run("fail, account belongs to org, if only account id is specified, roles & region are not specified", func(t *testing.T) {
+		err := doConfig(t, coreConfig, `account_ids_belong_to_org_validation = { org_account_id = "dummy_account" }`)
+		require.Error(t, err, orgVerificationFeatureErr)
+	})
+
+	t.Run("success, account_ids_belong_to_org_validation featured is turn on with required param", func(t *testing.T) {
+		err := doConfig(t, coreConfig, `account_ids_belong_to_org_validation = { org_account_id = "dummy_account" org_account_role = "dummy_role" org_account_region = "us-west-2" }`)
+		require.NoError(t, err)
+	})
 }
 
 func TestInstanceProfileArnParsing(t *testing.T) {
@@ -624,7 +684,12 @@ func (c *fakeClient) GetInstanceProfile(_ context.Context, input *iam.GetInstanc
 }
 
 func (c *fakeClient) DescribeAccount(_ context.Context, input *organizations.DescribeAccountInput, _ ...func(*organizations.Options)) (*organizations.DescribeAccountOutput, error) {
-	// WIP
+	expectInput := &organizations.DescribeAccountInput{
+		AccountId: &testAccount,
+	}
+	if diff := cmp.Diff(input, expectInput, cmpopts.IgnoreUnexported(organizations.DescribeAccountInput{})); diff != "" {
+		return nil, fmt.Errorf("unexpected request: %s", diff)
+	}
 	return c.DescribeAccountOutput, c.DescribeAccountError
 }
 
