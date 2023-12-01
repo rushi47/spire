@@ -414,7 +414,7 @@ func TestAttest(t *testing.T) {
 			expectMsgPrefix:         "nodeattestor(aws_iid): failed aws node attestation, issue while verifying if nodes account id belong to org",
 		},
 		{
-			name:   "success when account is active for node in organization, and selectors are not overridden",
+			name:   "success, when organization validation feature is turned on, should not affect label selectors",
 			config: `account_ids_belong_to_org_validation = { org_account_id = "12345" org_account_role = "test-orgrole" org_account_region = "test-orgregion" }`,
 			mutateDescribeAccountOutput: func(output *organizations.DescribeAccountOutput) {
 				output.Account = &types.Account{
