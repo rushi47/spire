@@ -78,7 +78,7 @@ const (
 	sgNameSelectorPrefix     = "sg:name"
 	tagSelectorPrefix        = "tag"
 	iamRoleSelectorPrefix    = "iamrole"
-	// below account id and role would be use to aws organisation client
+	// below account id and role would be use to create aws organisation client
 	orgAccountID     = "org_account_id"
 	orgAccountRole   = "org_account_role"
 	orgAccRegion     = "org_account_region" // required for cache key
