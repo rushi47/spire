@@ -187,7 +187,7 @@ func (p *IIDAttestorPlugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServ
 		return status.Errorf(codes.Internal, "failed to describe instance: %v", err)
 	}
 
-	// WIP : Check if the account belongs to organisation
+	// Check if the account belongs to organisation
 	// Get the account id of the node from attestation and then check if respective account belongs to organisation
 	if p.config.ValidateOrgAccountID != nil {
 		if err := p.validateAccountBelongstoOrg(ctx, attestationData.AccountID); err != nil {
