@@ -52,7 +52,7 @@ assuming AWS IID document sent from the spire agent contains `accountId : 123456
 
 For configuring AWS Node attestation method with organization validation following configuration can be used : 
 
-```
+```hcl
   NodeAttestor "aws_iid" {
     plugin_data {
       partition          = "aws"
@@ -66,7 +66,7 @@ For configuring AWS Node attestation method with organization validation followi
   }
 
 ```
-Using the block `account_ids_belong_to_org_validation` the org validation node attestation method will be enabled. With above configuration spire server will try to assume this role : `arn:aws:iam::7891011:role/spire-server-org-role` to check if node account id belongs to organization. This role, should have permission to make `DescribeAccount` request. More on describe account request, can be read from aws [docs](https://docs.aws.amazon.com/organizations/latest/APIReference/API_DescribeAccount.html).
+Using the block `account_ids_belong_to_org_validation` the org validation node attestation method will be enabled. With above configuration spire server will try to assume this role : `arn:aws:iam::7891011:role/spire-server-org-role` to check if node account id belongs to organization. This role, should have permission to make `DescribeAccount` request. More on describe account request, can be read from aws [docs](https://docs.aws.amazon.com/organizations/latest/APIReference/API_DescribeAccount.html). Block shouldn't be empty ex. `account_ids_belong_to_org_validation = {}` it should be completely removed as its optional or should have all required parameters.
 
 ## Disabling Instance Profile Selectors
 
