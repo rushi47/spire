@@ -16,22 +16,18 @@ var (
 	defaultNewClientCallback = newClient
 )
 
-// Explict declaration of DescribeAccount interface for organization, as oficial awsk sdk for organization doesn't define interfaces for this method.
-type OrgDescribeAccountAPIClient interface {
-	DescribeAccount(ctx context.Context, params *organizations.DescribeAccountInput, optFns ...func(*organizations.Options)) (*organizations.DescribeAccountOutput, error)
-}
-
 type Client interface {
 	ec2.DescribeInstancesAPIClient
 	iam.GetInstanceProfileAPIClient
-	OrgDescribeAccountAPIClient
+	organizations.ListAccountsAPIClient
 }
 
 type clientsCache struct {
-	mtx       sync.RWMutex
-	config    *SessionConfig
-	clients   map[string]*cacheEntry
-	newClient newClientCallback
+	mtx            sync.RWMutex
+	config         *SessionConfig
+	clients        map[string]*cacheEntry
+	orgAccountList map[string]string
+	newClient      newClientCallback
 }
 
 type cacheEntry struct {
@@ -51,6 +47,7 @@ func newClientsCache(newClient newClientCallback) *clientsCache {
 func (cc *clientsCache) configure(config SessionConfig) {
 	cc.mtx.Lock()
 	cc.clients = make(map[string]*cacheEntry)
+	cc.orgAccountList = make(map[string]string)
 	cc.config = &config
 	cc.mtx.Unlock()
 }
@@ -123,10 +120,10 @@ func newClient(ctx context.Context, config *SessionConfig, region string, assume
 	return struct {
 		iam.GetInstanceProfileAPIClient
 		ec2.DescribeInstancesAPIClient
-		OrgDescribeAccountAPIClient
+		organizations.ListAccountsAPIClient
 	}{
 		GetInstanceProfileAPIClient: iam.NewFromConfig(conf),
 		DescribeInstancesAPIClient:  ec2.NewFromConfig(conf),
-		OrgDescribeAccountAPIClient: organizations.NewFromConfig(conf),
+		ListAccountsAPIClient:       organizations.NewFromConfig(conf),
 	}, nil
 }

@@ -15,6 +15,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -79,10 +80,12 @@ const (
 	tagSelectorPrefix        = "tag"
 	iamRoleSelectorPrefix    = "iamrole"
 	// below account id and role would be use to create aws organisation client
-	orgAccountID     = "org_account_id"
-	orgAccountRole   = "org_account_role"
-	orgAccRegion     = "org_account_region" // required for cache key
-	orgAccountStatus = "ACTIVE"             // Only allow node account id's with status ACTIVE
+	orgAccountID             = "org_account_id"
+	orgAccountRole           = "org_account_role"
+	orgAccRegion             = "org_account_region"  // required for cache key
+	orgAccountStatus         = "ACTIVE"              // Only allow node account id's with status ACTIVE
+	orgAccountListTTL        = "org_account_map_ttl" // Cache the list of account for specific time, if not sent default will be used.
+	orgAccountDefaultListTTL = "3"                   // pull account list after 3 hrs
 )
 
 // BuiltIn creates a new built-in plugin
@@ -190,9 +193,16 @@ func (p *IIDAttestorPlugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServ
 	// Check if the account belongs to organisation
 	// Get the account id of the node from attestation and then check if respective account belongs to organisation
 	if p.config.ValidateOrgAccountID != nil {
-		if err := p.validateAccountBelongstoOrg(ctx, attestationData.AccountID); err != nil {
-			return status.Errorf(codes.Internal, "failed aws node attestation, issue while verifying if nodes account id belong to org: %v", err)
+		valid, err := p.validateAccountBelongstoOrg(ctx, attestationData.AccountID)
+
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed aws ec2 attestation, issue while verifying if nodes account id belong to org: %v", err)
 		}
+
+		if !valid {
+			return status.Errorf(codes.Internal, "failed aws ec2 attestation, %v id is not part of configured organization", attestationData.AccountID)
+		}
+
 	}
 
 	// Ideally we wouldn't do this work at all if the agent has already attested
@@ -295,7 +305,7 @@ func (p *IIDAttestorPlugin) Configure(_ context.Context, req *configv1.Configure
 		_, checkAccRegion := config.ValidateOrgAccountID[orgAccRegion]
 
 		if !checkAccid || !checkAccRole || !checkAccRegion {
-			return nil, status.Errorf(codes.InvalidArgument, "make sure %v, %v & %v are present inside block : %v for feature node attestation using account id verification", "account_ids_belong_to_org_validation", orgAccountID, orgAccountRole, orgAccRegion)
+			return nil, status.Errorf(codes.InvalidArgument, "make sure %v, %v & %v are present inside block or remove the block : %v for feature node attestation using account id verification", "account_ids_belong_to_org_validation", orgAccountID, orgAccountRole, orgAccRegion)
 		}
 	}
 
@@ -588,8 +598,72 @@ func isValidAWSPartition(partition string) bool {
 
 // This verification method checks if the Account ID attached on the node belongs to the organisation
 // if it belongs to organisation then validation should be succesfull if not attestation should fail on turning on this verification
-// method. Ideally this could be alternative to method for not explictly maintaing allowed list of account ids
-func (p *IIDAttestorPlugin) validateAccountBelongstoOrg(ctx context.Context, accoundIDofNode string) error {
+// method. Ideally this could be alternative to method for not explictly maintaing allowed list of account ids.
+// Method pulls the list of accounts from organization and caches it for certain time, cache time can be configured.
+func (p *IIDAttestorPlugin) validateAccountBelongstoOrg(ctx context.Context, accoundIDofNode string) (bool, error) {
+
+	isStale, err := p.CheckIfOrgAccountListIsStale(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	// refresh the account map
+	if isStale {
+		if err := p.FetchAccountsListFromOrg(ctx); err != nil {
+			return false, err
+		}
+	}
+
+	// Check if account contains in organization list
+	_, exist := p.clients.orgAccountList[accoundIDofNode]
+	if !exist {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// Check if the org account list is stale.
+func (p *IIDAttestorPlugin) CheckIfOrgAccountListIsStale(ctx context.Context) (bool, error) {
+
+	// Map is empty that means this is first time plugin is being initialised
+	if len(p.clients.orgAccountList) == 0 {
+		return false, nil
+	}
+
+	// Get the timestamp from config
+	t := p.clients.orgAccountList["timestamp"]
+
+	existingTimestamp, err := time.Parse(time.UTC.String(), t)
+
+	if err != nil {
+		return false, fmt.Errorf("issue while parsing timestamp for org account list map : %v", err)
+	}
+
+	currTimeStamp := time.Now().UTC()
+
+	orgAccountListCacheTTL, okOrgTTL := p.config.ValidateOrgAccountID[orgAccountListTTL]
+
+	if !okOrgTTL {
+		orgAccountListCacheTTL = orgAccountDefaultListTTL
+	}
+
+	ttl, err := strconv.Atoi(orgAccountListCacheTTL)
+	if err != nil {
+		// assign default ttl and move on
+		ttl, _ = strconv.Atoi(orgAccountDefaultListTTL)
+	}
+
+	// Check diff of timestamp of org acc map & current time if its more than ttl, refresh the list
+	if currTimeStamp.Sub(existingTimestamp) >= time.Duration(ttl)*time.Hour {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// Get the list of accounts belonging to organization and catch them
+func (p *IIDAttestorPlugin) FetchAccountsListFromOrg(ctx context.Context) error {
 
 	orgAccountID := p.config.ValidateOrgAccountID[orgAccountID]
 	orgAccountRegion := p.config.ValidateOrgAccountID[orgAccRegion]
@@ -600,18 +674,43 @@ func (p *IIDAttestorPlugin) validateAccountBelongstoOrg(ctx context.Context, acc
 		return err
 	}
 
-	// Check if the account id belongs to org
-	descAccOpt, err := awsOrgClient.DescribeAccount(ctx, &organizations.DescribeAccountInput{
-		AccountId: &accoundIDofNode,
-	})
+	// Get the list of accounts
+	listAccountsOp, err := awsOrgClient.ListAccounts(ctx, &organizations.ListAccountsInput{})
 	if err != nil {
-		return err
+		return fmt.Errorf("issue while getting list of accounts: %v", err)
 	}
 
-	// Only allow if the status of the account is ACTIVE.
-	if descAccOpt.Account.Status != types.AccountStatusActive {
-		return fmt.Errorf("%v, account id status is not active", accoundIDofNode)
+	//Build new org accounts list
+	orgAccountsMap := make(map[string]string)
+
+	// Update the org account list cache with ACTIVE accounts & handle pagination
+	for {
+
+		for _, acc := range listAccountsOp.Accounts {
+			if acc.Status == types.AccountStatusActive {
+				accId := *acc.Id
+				orgAccountsMap[accId] = accId
+			}
+		}
+
+		if listAccountsOp.NextToken == nil {
+			break
+		}
+
+		listAccountsOp, err = awsOrgClient.ListAccounts(ctx, &organizations.ListAccountsInput{
+			NextToken: listAccountsOp.NextToken,
+		})
+		if err != nil {
+			return fmt.Errorf("issue while getting list of accounts in pagination: %v", err)
+		}
 	}
+
+	// Add timestamp to make sure we can validate its expiry
+	t := time.Now().UTC()
+	orgAccountsMap["timestamp"] = t.String()
+
+	// Overwrite the cache/list
+	p.clients.orgAccountList = orgAccountsMap
 
 	return nil
 }
