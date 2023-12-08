@@ -196,11 +196,11 @@ func (p *IIDAttestorPlugin) Attest(stream nodeattestorv1.NodeAttestor_AttestServ
 		valid, err := p.validateAccountBelongstoOrg(ctx, attestationData.AccountID)
 
 		if err != nil {
-			return status.Errorf(codes.Internal, "failed aws ec2 attestation, issue while verifying if nodes account id belong to org: %v", err)
+			return status.Errorf(codes.Internal, "failed aws ec2 attestation, issue while verifying if nodes account id: %v belong to org: %v", attestationData.AccountID, err)
 		}
 
 		if !valid {
-			return status.Errorf(codes.Internal, "failed aws ec2 attestation, %v id is not part of configured organization", attestationData.AccountID)
+			return status.Errorf(codes.Internal, "failed aws ec2 attestation, %v account id is not part of configured organization or doesn't have ACTIVE status", attestationData.AccountID)
 		}
 
 	}
@@ -305,7 +305,7 @@ func (p *IIDAttestorPlugin) Configure(_ context.Context, req *configv1.Configure
 		_, checkAccRegion := config.ValidateOrgAccountID[orgAccRegion]
 
 		if !checkAccid || !checkAccRole || !checkAccRegion {
-			return nil, status.Errorf(codes.InvalidArgument, "make sure %v, %v & %v are present inside block or remove the block : %v for feature node attestation using account id verification", "account_ids_belong_to_org_validation", orgAccountID, orgAccountRole, orgAccRegion)
+			return nil, status.Errorf(codes.InvalidArgument, "make sure %v, %v & %v are present inside block or remove the block : %v for feature node attestation using account id verification", orgAccountID, orgAccountRole, orgAccRegion, "account_ids_belong_to_org_validation")
 		}
 	}
 
@@ -596,9 +596,9 @@ func isValidAWSPartition(partition string) bool {
 	return false
 }
 
-// This verification method checks if the Account ID attached on the node belongs to the organisation
-// if it belongs to organisation then validation should be succesfull if not attestation should fail on turning on this verification
-// method. Ideally this could be alternative to method for not explictly maintaing allowed list of account ids.
+// This verification method checks if the Account ID attached on the node belongs to the organisation.
+// If it belongs to organisation then validation should be succesfull if not attestation should fail, on enabling this verification method.
+// Ideally this could be alternative to method for not explictly maintaing allowed list of account ids.
 // Method pulls the list of accounts from organization and caches it for certain time, cache time can be configured.
 func (p *IIDAttestorPlugin) validateAccountBelongstoOrg(ctx context.Context, accoundIDofNode string) (bool, error) {
 
@@ -628,7 +628,7 @@ func (p *IIDAttestorPlugin) CheckIfOrgAccountListIsStale(ctx context.Context) (b
 
 	// Map is empty that means this is first time plugin is being initialised
 	if len(p.clients.orgAccountList) == 0 {
-		return false, nil
+		return true, nil
 	}
 
 	// Get the timestamp from config

@@ -19,7 +19,7 @@ this plugin resolves the agent's AWS IID-based SPIFFE ID into a set of selectors
 | `disable_instance_profile_selectors` | Disables retrieving the attesting instance profile information that is used in the selectors. Useful in cases where the server cannot reach iam.amazonaws.com | false                                                 |
 | `assume_role`                        | The role to assume                                                                                                                                            | Empty string, Optional parameter.                     |
 | `partition`                          | The AWS partition SPIRE server is running in &lt;aws&vert;aws-cn&vert;aws-us-gov&gt;                                                                          | aws                                                  |
-| `account_ids_belong_to_org_validation`   | Enable the AWS node attestation method, wherein a node can be verified, if its account ID belongs to an AWS Organization. | false, Optional config block with parameters. <br/> Sample [config](#enabling-aws-node-attestation-organization-validation).
+| `account_ids_belong_to_org_validation`   | Enable the AWS node attestation method, where a node can be verified, if it's account ID belongs to an AWS Organization. | false, Optional config block with parameters. <br/> Sample [config](#enabling-aws-node-attestation-organization-validation).
 
 
 
@@ -61,12 +61,13 @@ For configuring AWS Node attestation method with organization validation followi
         org_account_id     = "7891011"
         org_account_role   = "spire-server-org-role"
         org_account_region = "us-west-2"
+        org_account_map_ttl = "6"
       }
     }
   }
 
 ```
-Using the block `account_ids_belong_to_org_validation` the org validation node attestation method will be enabled. With above configuration spire server will try to assume this role : `arn:aws:iam::7891011:role/spire-server-org-role` to check if node account id belongs to organization. This role, should have permission to make `DescribeAccount` request. More on describe account request, can be read from aws [docs](https://docs.aws.amazon.com/organizations/latest/APIReference/API_DescribeAccount.html). Block shouldn't be empty ex. `account_ids_belong_to_org_validation = {}` it should be completely removed as its optional or should have all required parameters.
+Using the block `account_ids_belong_to_org_validation` the org validation node attestation method will be enabled. With above configuration spire server will try to assume this role : `arn:aws:iam::7891011:role/spire-server-org-role` and get the list of all accounts in organization. When node attestation request is sent to server, nodes account id will be check against this list. The role, should have permission to make `ListAccounts` request. More on list account request, can be read from aws [docs](https://docs.aws.amazon.com/organizations/latest/APIReference/API_ListAccounts.html). When not used, block ex. `account_ids_belong_to_org_validation = {}` should not be empty, it should be completely removed as its optional or should have all required parameters namely `org_account_id`, `org_account_role`, `org_account_region`. `org_account_map_ttl` is an optional param to configure TTL in hours. If this param is not defined, default TTL for the account list cache is 3hrs. 
 
 ## Disabling Instance Profile Selectors
 
